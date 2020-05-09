@@ -313,7 +313,7 @@ impl<'a, 'b, W: Write> Context<'a, 'b, W> {
             &self.settings.terminal_capabilities.style,
         ) {
             let regions = highlighter.highlight(&text, &self.settings.syntax_set);
-            highlighting::write_as_ansi(self.writer, ansi, &regions)?;
+            highlighting::write_as_ansi(self.writer, ansi, regions.into_iter())?;
         } else {
             self.write_styled_current(&text)?;
         }

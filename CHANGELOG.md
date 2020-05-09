@@ -10,6 +10,18 @@ To publish a new release run `scripts/release` from the project directory.
 ### Changed
 - `mdcat` is now distributed under the [MPL 2](http://mozilla.org/MPL/2.0/) license;
   some source files remain Apache 2.0 due to 3rd party rights (see [GH-138]).
+- Rewrite the rendering algorithm to replace the `Context` god object; mdcat now
+  explicitly tracks a stack of focused states.  This simplifies the algorithm a
+  lot and makes relations between states and Markdown events explicit and easier
+  to understand.  It also solves numerous rendering issues in the old
+  algorithm; mdcat now
+
+    - render margins after paragraphs and around HTML blocks more consistently,
+    - correctly indents code blocks inside other blocks such as quotes or lists,
+    - no longer emits an extra blank line before lists in certain situations,
+    - always indents block quotes correctly,
+    - prints link text in blue colour,
+    - TK: add all other fixes
 
 ### Fixed
 - Do not fail with broken pipe error when rending large images (see [GH-134] by

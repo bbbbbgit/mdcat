@@ -21,8 +21,7 @@ mod svg;
 mod terminal;
 
 mod context_write;
-
-use context_write::*;
+mod render;
 
 // Expose some select things for use in main
 pub use crate::resources::ResourceAccess;
@@ -73,31 +72,46 @@ where
     W: Write,
 {
     let theme = &ThemeSet::load_defaults().themes["Solarized (dark)"];
-    events
-        .try_fold(Context::new(writer, settings, base_dir, theme), write_event)?
-        .write_pending_links()?;
+    if cfg!(context_write) {
+        use context_write::*;
+        events
+            .try_fold(Context::new(writer, settings, base_dir, theme), write_event)?
+            .write_pending_links()?;
+    } else {
+        use render::*;
+        let (final_state, final_data) = events.try_fold(
+            (State::default(), StateData::default()),
+            |(state, data), event| {
+                write_event(writer, settings, base_dir, &theme, state, data, event)
+            },
+        )?;
+        finish(writer, settings, final_state, final_data)?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use pulldown_cmark::Parser;
 
-    fn render_string(input: &str, settings: &Settings) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn render_string(input: &str, settings: &Settings) -> Result<String, Box<dyn Error>> {
         let source = Parser::new(input);
         let mut sink = Vec::new();
         push_tty(settings, &mut sink, &Path::new("/"), source)?;
-        Ok(sink)
+        Ok(String::from_utf8_lossy(&sink).into())
     }
 
-    #[test]
-    #[allow(non_snake_case)]
-    fn GH_49_format_no_colour_simple() {
-        let result = String::from_utf8(
+    mod layout {
+        use super::render_string;
+        use crate::*;
+        use pretty_assertions::assert_eq;
+        use std::error::Error;
+        use syntect::parsing::SyntaxSet;
+
+        fn render(markup: &str) -> Result<String, Box<dyn Error>> {
             render_string(
-                "_lorem_ **ipsum** dolor **sit** _amet_",
+                markup,
                 &Settings {
                     resource_access: ResourceAccess::LocalOnly,
                     syntax_set: SyntaxSet::default(),
@@ -105,9 +119,125 @@ mod tests {
                     terminal_size: TerminalSize::default(),
                 },
             )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(result, "lorem ipsum dolor sit amet\n");
+        }
+
+        #[test]
+        #[allow(non_snake_case)]
+        fn GH_49_format_no_colour_simple() {
+            assert_eq!(
+                render("_lorem_ **ipsum** dolor **sit** _amet_").unwrap(),
+                "lorem ipsum dolor sit amet\n",
+            )
+        }
+
+        #[test]
+        fn begins_with_rule() {
+            assert_eq!(render("----").unwrap(), "════════════════════════════════════════════════════════════════════════════════\n")
+        }
+
+        #[test]
+        fn begins_with_block_quote() {
+            assert_eq!(render("> Hello World").unwrap(), "    Hello World\n")
+        }
+
+        #[test]
+        fn rule_in_block_quote() {
+            assert_eq!(
+                render(
+                    "> Hello World
+
+> ----"
+                )
+                .unwrap(),
+                "    Hello World
+
+    ════════════════════════════════════════════════════════════════════════════\n"
+            )
+        }
+
+        #[test]
+        fn heading_in_block_quote() {
+            assert_eq!(
+                render(
+                    "> Hello World
+
+> # Hello World"
+                )
+                .unwrap(),
+                "    Hello World
+
+    ┄Hello World\n"
+            )
+        }
+
+        #[test]
+        fn heading_levels() {
+            assert_eq!(
+                render(
+                    "
+# First
+
+## Second
+
+### Third"
+                )
+                .unwrap(),
+                "┄First
+
+┄┄Second
+
+┄┄┄Third\n"
+            )
+        }
+
+        #[test]
+        fn autolink_creates_no_reference() {
+            assert_eq!(
+                render("Hello <http://example.com>").unwrap(),
+                "Hello http://example.com\n"
+            )
+        }
+
+        #[test]
+        fn flush_ref_links_before_toplevel_heading() {
+            assert_eq!(
+                render(
+                    "> Hello [World](http://example.com/world)
+
+> # No refs before this headline
+
+# But before this"
+                )
+                .unwrap(),
+                "    Hello World[1]
+
+    ┄No refs before this headline
+
+[1]: http://example.com/world \n
+┄But before this\n"
+            )
+        }
+
+        #[test]
+        fn flush_ref_links_at_end() {
+            assert_eq!(
+                render(
+                    "Hello [World](http://example.com/world)
+
+# Headline
+
+Hello [Donald](http://example.com/Donald)"
+                )
+                .unwrap(),
+                "Hello World[1]
+
+[1]: http://example.com/world \n
+┄Headline
+
+Hello Donald[2]
+
+[2]: http://example.com/Donald \n"
+            )
+        }
     }
 }
